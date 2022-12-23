@@ -1,8 +1,8 @@
-const sequelize = require('./config/connection')
+const connection = require('./config/connection');
 const inquirer = require('inquirer');
 
 const viewAllDep = () => {
-    sequelize.query("SELECT name AS Departments FROM department", (err, res) => {
+    connection.query("SELECT department.id, department.name FROM department", (err, res) => {
         if(err)throw err
         console.table(res);
         runPrompt();
@@ -10,7 +10,7 @@ const viewAllDep = () => {
 };
 
 const viewRoles = () => {
-    sequelize.query("SELECT title, salary FROM role", (err, res) => {
+    connection.query("SELECT role.id, role.title, department.name AS department, role.salary FROM role LEFT JOIN department on role.department_id = department.id", (err, res) => {
         if(err) throw err
         console.table(res);
         runPrompt();
@@ -18,7 +18,7 @@ const viewRoles = () => {
 };
 
 const viewAllEmployees = () => {
-    sequelize.query("SELECT employee.id, employee.first_name, employee.last_name, role.title AS Title, department.name AS Department, role.salary AS Salary FROM employee INNER JOIN employee_role on employee_role.id = employee.role_id INNER JOIN department on department.id = employee_role.department_id", (err, res) => {
+    connection.query("SELECT employee.id, employee.first_name, employee.last_name, role.title, department.name AS department, role.salary, CONCAT(manager.first_name, ' ', manager.last_name) AS manager FROM employee LEFT JOIN role on employee.role_id = role.id LEFT JOIN department on role.department_id = department.id LEFT JOIN employee manager on manager.id = employee.manager_id", (err, res) => {
         if(err)throw err
         console.table(res);
         runPrompt();
@@ -26,36 +26,36 @@ const viewAllEmployees = () => {
 };
 
 const viewEmployeesByDep = () => {
-    sequelize.query("SELECT employee.first_name, employee.last_name, department.name AS Department FROM employee JOIN role ON employee.role_id = role.id JOIN department ON role.department_id = department.id ORDER BY employee.id", (err, res) => {
+    connection.query("SELECT employee.id, employee.first_name, employee.last_name, role.title FROM employee LEFT JOIN role on employee.role_id = role.id LEFT JOIN department department on role.department_id = department.id WHERE department.id = ?", (err, res) => {
         if(err)throw err
         console.table(res);
         runPrompt()
     })
 };
 
-const addDep = () => {
+function addDep() {
     inquirer.prompt([
       {
         name: "name",
         type: "input",
         message: "What department would you like to add?",
       }
-    ]).then(function(answer){
-      sequelize.query("INSERT INTO department SET ?",
+    ]).then(function(res){
+      connection.query("INSERT INTO department SET ?",
       {
-        name: answer.name
+        name: res.name
       },
       function(err){
         if (err) throw err
         console.log("Department added.");
-        console.table(answer);
+        console.table(res);
         runPrompt();
       })
     })
 };
 
-const addRole = () => {
-    sequelize.query("SELECT role.title AS Title, role.salary AS Salary FROM role", (err, res)=>{
+function addRole() {
+    connection.query("SELECT role.title AS Title, role.salary AS Salary FROM role", (err, res)=>{
       if(err) throw err
       inquirer.prompt([
         {
@@ -69,60 +69,149 @@ const addRole = () => {
           message: "What is the salary for this role?",
         },
       ])
-      .then((answers) =>{
-        
-      })
+      .then(function(res){
+        connection.query("INSERT INTO role SET ?",
+        {
+          title: res.Title,
+          salary: res.Salary
+        },
+        function (err) {
+          if (err) throw err;
+          console.log("Added employee role")
+          console.table(res);
+          runPrompt();
+        }
+        );
+      });
     })
  
 };
 
-const updateRole = () => {
+function updateRole() {
+  connection.promise().query("SELECT employee.id, employee.first_name, employee.last_name, role.title, department.name AS department, role.salary, CONCAT(manager.first_name, ' ', manager.last_name) AS manager FROM employee LEFT JOIN role on employee.role_id = role.id LEFT JOIN department on role.department_id = department.id LEFT JOIN employee manager on manager.id = employee.manager_id")
+    .then(([rows]) => {
+      let employees = rows;
+      const employeeChoices = employees.map(({ id, first_name, last_name }) => ({
+        name: `${first_name} ${last_name}`,
+        value: id
+      }));
 
-};
+      inquirer.prompt([
+        {
+          type: "list",
+          name: "employeeId",
+          message: "Which employee's role do you want to update?",
+          choices: employeeChoices
+        }
+      ])
+        .then(res => {
+          connection.promise().query("SELECT role.id, role.title, department.name AS department, role.salary FROM role LEFT JOIN department on role.department_id = department.id")
+            .then(([rows]) => {
+              let roles = rows;
+              const roleChoices = roles.map(({ id, title }) => ({
+                name: title,
+                value: id
+              }));
 
-const addEmployee = () => {
-    sequelize.query("SELECT * FROM role", (err, res)=>{
-        if(err) throw err
-        inquirer.prompt([
-            {
-                name: 'first_name',
-                type: 'input',
-                message: 'Enter the employee first name.'
-            },
-            {
-                name: 'last_name',
-                type: 'input',
-                message: 'Enter the employee first name.'
-            },
-            {
-                name: 'role_id',
-                type: 'list',
-                message: 'Select employee role.',
-                choices: res.map((item)=> item.title)
-            },
-        ]).then((answers) => {
-            const firstName = answers.first_name;
-            const lastName = answers.last_name
+              inquirer.prompt([
+                {
+                  type: "list",
+                  name: "roleId",
+                  message: "Which role do you want to assign the selected employee?",
+                  choices: roleChoices
+                }
+              ])
+                .then((res) => connection.promise().query("UPDATE employee SET role_id = ? WHERE id = ?"))
+                .then(() => console.log("Updated employee's role"))
+                .then(() => runPrompt())
+            });
         });
-        
-    });
-};
+    })
+}
 
-const removeEmployee = () => {
-    sequelize.query("SELECT * FROM employee", (err, res)=> {
+function addEmployee() {
+  inquirer.prompt([
+    {
+      name: "first_name",
+      message: "What is the employee's first name?"
+    },
+    {
+      name: "last_name",
+      message: "What is the employee's last name?"
+    }
+  ])
+    .then((res) => {
+      let firstName = res.first_name;
+      let lastName = res.last_name;
+
+      connection.promise().query("SELECT role.id, role.title, department.name AS department, role.salary FROM role LEFT JOIN department on role.department_id = department.id")
+        .then(([rows]) => {
+          let roles = rows;
+          const roleChoices = roles.map(({ id, title }) => ({
+            name: title,
+            value: id
+          }));
+
+          inquirer.prompt({
+            type: "list",
+            name: "roleId",
+            message: "What is the employee's role?",
+            choices: roleChoices
+          })
+            .then((res) => {
+              let roleId = res.roleId;
+
+              connection.promise().query("SELECT employee.id, employee.first_name, employee.last_name, role.title, department.name AS department, role.salary, CONCAT(manager.first_name, ' ', manager.last_name) AS manager FROM employee LEFT JOIN role on employee.role_id = role.id LEFT JOIN department on role.department_id = department.id LEFT JOIN employee manager on manager.id = employee.manager_id")
+                .then(([rows]) => {
+                  let employees = rows;
+                  const managerChoices = employees.map(({ id, first_name, last_name }) => ({
+                    name: `${first_name} ${last_name}`,
+                    value: id
+                  }));
+
+                  managerChoices.unshift({ name: "None", value: null });
+
+                  inquirer.prompt({
+                    type: "list",
+                    name: "managerId",
+                    message: "Who is the employee's manager?",
+                    choices: managerChoices
+                  })
+                    .then((res) => {
+                      let employee = {
+                        manager_id: res.managerId,
+                        role_id: roleId,
+                        first_name: firstName,
+                        last_name: lastName
+                      }
+
+                      connection.query("INSERT INTO employee SET ?", employee)
+                    })
+                    .then(() => console.log(
+                      `Added ${firstName} ${lastName} to the database`
+                    ))
+                    .then(() => runPrompt())
+                })
+            })
+        })
+    })
+}
+
+function removeEmployee() {
+    connection.query("SELECT * FROM employee", (err, res)=> {
         if(err) throw err
         inquirer.prompt([
             {
                 name: 'removeEmp',
                 type: 'list',
                 message: 'Select employee to remove',
-                choices: res.map(emp => emp.id && emp.first_name)
+                choices: res.map(employee => employee.id && employee.first_name)
             }
         ]).then((selection)=>{
-            const selectEmp = res.find(emp => emp.id && emp.first_name === selection.removeEmp);
-            sequelize.query("DELETE FROM employee WHERE ?",
+            const selectEmployee = res.find(employee => employee.id && employee.first_name === selection.removeEmp);
+            connection .query("DELETE FROM employee WHERE ?",
             [{
-                id: selectEmp.id
+                id: selectEmployee.id
             }],
             (err, res) => {
                 if(err) throw err
@@ -194,8 +283,9 @@ const runPrompt = () => {
   
           default:
             console.log("Finished Using App!");
-            break;
+            process.exit();
         }
       });
   };
   
+  runPrompt();
